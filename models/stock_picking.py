@@ -8,39 +8,34 @@ class StockPicking(models.Model):
     _inherit = 'stock.picking'
 
     def button_validate(self):
-        """
-        Override default validation to force picking to done state
-        without going through standard validation process.
-        """
-        for picking in self:
-            if picking.state in ('done', 'cancel'):
-                continue
-            
-            _logger.info('Force Done: Bypassing validation for picking %s', picking.name)
-            
-            # Process move lines - set qty_done and state
-            for move_line in picking.move_line_ids:
-                vals = {'state': 'done'}
-                if move_line.qty_done == 0:
-                    vals['qty_done'] = move_line.reserved_qty or move_line.reserved_uom_qty or 0
-                move_line.write(vals)
-            
-            # Process stock moves - set quantity_done and state
-            for move in picking.move_ids:
-                vals = {'state': 'done'}
-                if move.quantity_done == 0:
-                    vals['quantity_done'] = move.product_uom_qty
-                move.write(vals)
-            
-            # Force picking to done
-            picking.write({
-                'state': 'done',
-                'date_done': fields.Datetime.now(),
-            })
-            
-            _logger.info('Force Done: Picking %s set to done', picking.name)
-        
-        return True
+    """
+    Force picking to done state using ONLY the qty actually received.
+    Do NOT modify qty_done or quantity_done.
+    """
+    for picking in self:
+        if picking.state in ('done', 'cancel'):
+            continue
+
+        _logger.info('Force Done: Completing picking %s using received quantities only', picking.name)
+
+        # Mark move lines as done WITHOUT changing qty_done
+        for move_line in picking.move_line_ids:
+            move_line.write({'state': 'done'})
+
+        # Mark stock moves as done WITHOUT changing quantity_done
+        for move in picking.move_ids:
+            move.write({'state': 'done'})
+
+        # Mark picking as done
+        picking.write({
+            'state': 'done',
+            'date_done': fields.Datetime.now(),
+        })
+
+        _logger.info('Force Done: Picking %s set to done', picking.name)
+
+    return True
+
 
 
 class StockMove(models.Model):
