@@ -43,8 +43,17 @@ class StockPicking(models.Model):
         """
         Show the standard Odoo backorder confirmation wizard.
         """
+        # Create wizard lines for each picking
+        line_vals = []
+        for pick in picking:
+            line_vals.append((0, 0, {
+                'picking_id': pick.id,
+                'to_backorder': True,
+            }))
+
         backorder_wizard = self.env['stock.backorder.confirmation'].create({
-            'pick_ids': [(4, picking.id)],
+            'pick_ids': [(6, 0, picking.ids)],
+            'backorder_confirmation_line_ids': line_vals,
         })
 
         return {
@@ -53,8 +62,9 @@ class StockPicking(models.Model):
             'res_model': 'stock.backorder.confirmation',
             'res_id': backorder_wizard.id,
             'view_mode': 'form',
+            'views': [(False, 'form')],
             'target': 'new',
-            'context': self.env.context,
+            'context': dict(self.env.context, button_validate_picking_ids=picking.ids),
         }
 
     def _force_done(self, picking):
@@ -119,7 +129,6 @@ class StockPicking(models.Model):
                     'location_id': move.location_id.id,
                     'location_dest_id': move.location_dest_id.id,
                     'name': move.name,
-                    # Use sudo() to access purchase_line_id
                     'purchase_line_id': move_sudo.purchase_line_id.id if move_sudo.purchase_line_id else False,
                     'origin': move.origin,
                 })
@@ -212,7 +221,7 @@ class StockBackorderConfirmation(models.TransientModel):
         """
         for picking in self.pick_ids:
             picking._process_with_backorder()
-        return True
+        return {'type': 'ir.actions.act_window_close'}
 
     def process_cancel_backorder(self):
         """
@@ -220,7 +229,7 @@ class StockBackorderConfirmation(models.TransientModel):
         """
         for picking in self.pick_ids:
             picking._force_done_no_backorder()
-        return True
+        return {'type': 'ir.actions.act_window_close'}
 
 
 class StockMove(models.Model):
