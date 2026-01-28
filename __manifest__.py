@@ -11,7 +11,7 @@
     """,
     'author': 'Custom',
     'license': 'LGPL-3',
-    'depends': ['stock'],
+    'depends': ['stock', 'purchase_stock'],
     'installable': True,
     'application': False,
     'auto_install': False,
