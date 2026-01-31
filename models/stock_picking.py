@@ -38,11 +38,17 @@ class StockPicking(models.Model):
             # Ensure move lines exist and have qty_done
             picking._force_set_qty_done()
 
-            # Create backorder for remaining qty
-            picking._force_create_backorder()
+            # Create backorder for remaining qty (unless skipped)
+            if not self.env.context.get('skip_backorder_creation'):
+                picking._force_create_backorder()
 
             # Force moves to done
             for move in picking.move_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
+                # Update move qty to match qty_done when no backorder
+                if self.env.context.get('skip_backorder_creation'):
+                    qty_done = sum(move.move_line_ids.mapped('qty_done'))
+                    move.product_uom_qty = qty_done
+
                 move.write({
                     'state': 'done',
                     'date': fields.Datetime.now(),
@@ -155,13 +161,11 @@ class StockBackorderConfirmation(models.TransientModel):
         return self.pick_ids.with_context(skip_backorder_wizard=True).button_validate()
 
     def process_cancel_backorder(self):
-        """No backorder - force validate (will skip backorder creation since qty_done = demand)."""
-        # Set qty_done to full demand so no backorder is created
-        for picking in self.pick_ids:
-            for move in picking.move_ids:
-                for line in move.move_line_ids:
-                    line.qty_done = line.reserved_uom_qty or move.product_uom_qty
-        return self.pick_ids.with_context(skip_backorder_wizard=True).button_validate()
+        """No backorder - validate with partial qty only."""
+        return self.pick_ids.with_context(
+            skip_backorder_wizard=True,
+            skip_backorder_creation=True
+        ).button_validate()
 
 
 class StockMove(models.Model):
