@@ -13,10 +13,16 @@ class StockPicking(models.Model):
     def button_validate(self):
         """
         Override to always force DONE state.
-        - No wizards, no popups
+        - Shows backorder popup for partial qty
         - Auto creates backorders for partial qty
         - Skips all validations
         """
+        # Check if backorder wizard should be shown
+        if not self.env.context.get('skip_backorder_wizard'):
+            pickings_to_backorder = self._get_pickings_needing_backorder()
+            if pickings_to_backorder:
+                return pickings_to_backorder._action_generate_backorder_wizard(show_transfers=self._should_show_transfers())
+
         for picking in self:
             if picking.state in ('done', 'cancel'):
                 continue
@@ -53,6 +59,25 @@ class StockPicking(models.Model):
             _logger.info('Force Validate: %s completed', picking.name)
 
         return True
+
+    def _get_pickings_needing_backorder(self):
+        """Return pickings that need backorder (have partial quantities)."""
+        pickings_needing_backorder = self.env['stock.picking']
+        
+        for picking in self:
+            if picking.state in ('done', 'cancel'):
+                continue
+            for move in picking.move_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
+                qty_done = sum(move.move_line_ids.mapped('qty_done'))
+                if qty_done == 0:
+                    continue
+                qty_remaining = move.product_uom_qty - qty_done
+                
+                if float_compare(qty_remaining, 0, precision_rounding=move.product_uom.rounding) > 0:
+                    pickings_needing_backorder |= picking
+                    break
+        
+        return pickings_needing_backorder
 
     def _force_set_qty_done(self):
         """Set qty_done on all move lines."""
@@ -120,6 +145,23 @@ class StockPicking(models.Model):
         
         _logger.info('Force Validate: Created backorder %s', backorder.name)
         return backorder
+
+
+class StockBackorderConfirmation(models.TransientModel):
+    _inherit = 'stock.backorder.confirmation'
+
+    def process(self):
+        """Create backorder and force validate."""
+        return self.pick_ids.with_context(skip_backorder_wizard=True).button_validate()
+
+    def process_cancel_backorder(self):
+        """No backorder - force validate (will skip backorder creation since qty_done = demand)."""
+        # Set qty_done to full demand so no backorder is created
+        for picking in self.pick_ids:
+            for move in picking.move_ids:
+                for line in move.move_line_ids:
+                    line.qty_done = line.reserved_uom_qty or move.product_uom_qty
+        return self.pick_ids.with_context(skip_backorder_wizard=True).button_validate()
 
 
 class StockMove(models.Model):
