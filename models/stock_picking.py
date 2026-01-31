@@ -35,8 +35,8 @@ class StockPicking(models.Model):
             if picking.state in ('confirmed', 'waiting'):
                 picking.action_assign()
 
-            # Ensure move lines exist and have qty_done
-            picking._force_set_qty_done()
+            # Ensure move lines exist (but don't auto-fill qty_done)
+            picking._force_ensure_move_lines()
 
             # Create backorder for remaining qty (unless skipped)
             if not self.env.context.get('skip_backorder_creation'):
@@ -44,10 +44,10 @@ class StockPicking(models.Model):
 
             # Force moves to done
             for move in picking.move_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
-                # Update move qty to match qty_done when no backorder
-                if self.env.context.get('skip_backorder_creation'):
-                    qty_done = sum(move.move_line_ids.mapped('qty_done'))
-                    move.product_uom_qty = qty_done
+                qty_done = sum(move.move_line_ids.mapped('qty_done'))
+                
+                # Update move qty to match qty_done
+                move.product_uom_qty = qty_done
 
                 move.write({
                     'state': 'done',
@@ -67,7 +67,7 @@ class StockPicking(models.Model):
         return True
 
     def _get_pickings_needing_backorder(self):
-        """Return pickings that need backorder (have partial quantities)."""
+        """Return pickings that need backorder (have partial or zero quantities)."""
         pickings_needing_backorder = self.env['stock.picking']
         
         for picking in self:
@@ -75,22 +75,22 @@ class StockPicking(models.Model):
                 continue
             for move in picking.move_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
                 qty_done = sum(move.move_line_ids.mapped('qty_done'))
-                if qty_done == 0:
-                    continue
                 qty_remaining = move.product_uom_qty - qty_done
                 
+                # Show popup if qty_done < demand (including when qty_done is 0)
                 if float_compare(qty_remaining, 0, precision_rounding=move.product_uom.rounding) > 0:
                     pickings_needing_backorder |= picking
                     break
         
         return pickings_needing_backorder
 
-    def _force_set_qty_done(self):
-        """Set qty_done on all move lines."""
+    def _force_ensure_move_lines(self):
+        """Ensure move lines exist but do NOT auto-fill qty_done."""
         self.ensure_one()
         
         for move in self.move_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
             if not move.move_line_ids:
+                # Create move line with qty_done = 0
                 self.env['stock.move.line'].create({
                     'move_id': move.id,
                     'picking_id': self.id,
@@ -98,13 +98,9 @@ class StockPicking(models.Model):
                     'product_uom_id': move.product_uom.id,
                     'location_id': move.location_id.id,
                     'location_dest_id': move.location_dest_id.id,
-                    'qty_done': move.product_uom_qty,
+                    'qty_done': 0,
                     'company_id': move.company_id.id,
                 })
-            else:
-                for line in move.move_line_ids:
-                    if line.qty_done == 0:
-                        line.qty_done = line.reserved_uom_qty or move.product_uom_qty
 
     def _force_create_backorder(self):
         """Create backorder for remaining quantities."""
@@ -116,7 +112,8 @@ class StockPicking(models.Model):
             qty_done = sum(move.move_line_ids.mapped('qty_done'))
             qty_remaining = move.product_uom_qty - qty_done
             
-            if float_compare(qty_remaining, 0, precision_rounding=move.product_uom.rounding) > 0 and qty_done > 0:
+            # Create backorder if there's remaining qty (even if qty_done is 0)
+            if float_compare(qty_remaining, 0, precision_rounding=move.product_uom.rounding) > 0:
                 backorder_data.append({
                     'move': move,
                     'qty_done': qty_done,
